@@ -111,7 +111,7 @@ class Model(object):
         with tf.device(device_id):
 
             self.height = tf.constant(DataGen.IMAGE_HEIGHT, dtype=tf.int32)
-            self.height_float = tf.constant(DataGen.IMAGE_HEIGHT, dtype=tf.float64)
+            self.height_float = tf.constant(DataGen.IMAGE_HEIGHT, dtype=tf.float32)
 
             self.img_pl = tf.placeholder(tf.string, name='input_image_as_bytes')
             self.img_data = tf.cond(
@@ -200,12 +200,12 @@ class Model(object):
                 trans_outprb = tf.gather(trans_outprb, tf.range(tf.size(trans_output)))
                 trans_outprb = tf.map_fn(
                     lambda m: tf.foldr(
-                        lambda a, x: tf.multiply(tf.cast(x, tf.float64), a),
+                        lambda a, x: tf.multiply(tf.cast(x, tf.float32), a),
                         m,
-                        initializer=tf.cast(1, tf.float64)
+                        initializer=tf.cast(1, tf.float32)
                     ),
                     trans_outprb,
-                    dtype=tf.float64
+                    dtype=tf.float32
                 )
 
                 self.prediction = tf.cond(
@@ -496,15 +496,19 @@ class Model(object):
         resized image to a fixed size of ``[self.height, self.width]``."""
         img = tf.image.decode_png(image, channels=self.channels)
         dims = tf.shape(img)
+        dims = tf.cast(x=dims, dtype=tf.float32)
+
         width = self.max_width
 
         max_width = tf.to_int32(tf.ceil(tf.truediv(dims[1], dims[0]) * self.height_float))
-        max_height = tf.to_int32(tf.ceil(tf.truediv(width, max_width) * self.height_float))
+
+        max_height = tf.to_int32(tf.ceil(tf.truediv(tf.cast(x=width, dtype=tf.float32),
+                                                    tf.cast(x=max_width, dtype=tf.float32)) * self.height_float))
 
         resized = tf.cond(
             tf.greater_equal(width, max_width),
             lambda: tf.cond(
-                tf.less_equal(dims[0], self.height),
+                tf.less_equal(tf.cast(x=dims[0], dtype=tf.int32), self.height),
                 lambda: tf.to_float(img),
                 lambda: tf.image.resize_images(img, [self.height, max_width],
                                                method=tf.image.ResizeMethod.BICUBIC),
