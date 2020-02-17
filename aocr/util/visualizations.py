@@ -45,11 +45,24 @@ def visualize_attention(filename, output_dir, attentions, pred, pad_width,
     """
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
+
+    if not os.path.exists(os.path.join(output_dir, "correct")):
+        os.makedirs(os.path.join(output_dir, "correct"))
+
+    if not os.path.exists(os.path.join(output_dir, "incorrect")):
+        os.makedirs(os.path.join(output_dir, "incorrect"))
+
     if flag is None:
-        filestring = 'predict-{}'.format(str(pred))
+        filestring = 'predict-{}_VS_{}'.format(str(pred), str(ground))
         idx = 2
+
+        if str(pred) == str(ground):
+            output_dir = os.path.join(output_dir, "correct")
+        else:
+            output_dir = os.path.join(output_dir, "incorrect")
+
         while filestring in os.listdir(output_dir):
-            filestring = 'predict-{}-{}'.format(str(pred), idx)
+            filestring = 'predict-{}_VS_{}-{}'.format(str(pred), str(ground), idx)
             idx += 1
         out_dir = output_dir
     elif flag:
