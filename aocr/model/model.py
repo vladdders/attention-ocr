@@ -8,6 +8,7 @@ import os
 import math
 import logging
 import sys
+from functools import reduce
 
 import distance
 import numpy as np
@@ -246,6 +247,13 @@ class Model(object):
         return (text, probability)
 
     def test(self, data_path):
+
+        def get_word_from_sequence(sequence):
+            return ''.join(DataGen.CHARMAP[j] for j in sequence)
+
+        def get_total_probability(probabilities):
+            return reduce(lambda x, y: x * y, probabilities)
+
         current_step = 0
         num_correct = 0.0
         num_total = 0.0
@@ -262,14 +270,18 @@ class Model(object):
             num_total += 1
 
             output = result['prediction']
+            # you want to decode the output as it's no longer done in the model graph
+            output = get_word_from_sequence(output[0])
             ground = batch['labels'][0]
             comment = batch['comments'][0]
-            # if sys.version_info >= (3,):
-                # output = output.decode('iso-8859-1')
-                # ground = ground.decode('iso-8859-1')
-                # comment = comment.decode('iso-8859-1')
+            if sys.version_info >= (3,):
+                ground = ground.decode('iso-8859-1')
+                comment = comment.decode('iso-8859-1')
 
             probability = result['probability']
+
+            # you also want to get the total probability as it's no longer done in the model graph
+            probability = get_total_probability(probability[0])
 
             if self.use_distance:
                 incorrect = distance.levenshtein(output, ground)
