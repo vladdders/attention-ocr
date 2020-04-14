@@ -1,5 +1,6 @@
 from __future__ import absolute_import
 
+import math
 import sys
 
 import numpy as np
@@ -27,7 +28,9 @@ class DataGen(object):
                  annotation_fn,
                  buckets,
                  epochs=1000,
-                 max_width=None):
+                 max_width=None,
+                 max_height=None,
+                 channels=1):
         """
         :param annotation_fn:
         :param lexicon_fn:
@@ -37,8 +40,16 @@ class DataGen(object):
         :param epochs:
         :return:
         """
+        self.channels = channels
         self.epochs = epochs
-        self.max_width = max_width
+
+        self.original_max_width = max_width
+        self.original_max_height = max_height
+
+        max_resized_width = 1. * max_width / max_height * DataGen.IMAGE_HEIGHT
+        self.max_width = int(math.ceil(max_resized_width))
+
+        self.height = DataGen.IMAGE_HEIGHT
 
         self.bucket_specs = buckets
         self.bucket_data = BucketData()
@@ -64,10 +75,10 @@ class DataGen(object):
                     raw_images, raw_labels, raw_comments = sess.run([images, labels, comments])
                     for img, lex, comment in zip(raw_images, raw_labels, raw_comments):
 
-                        if self.max_width and (Image.open(IO(img)).size[0] <= self.max_width):
+                        if self.original_max_width and (Image.open(IO(img)).size[0] <= self.original_max_width):
                             word = self.convert_lex(lex)
 
-                            bucket_size = self.bucket_data.append(img, word, lex, comment)
+                            bucket_size = self.bucket_data.append(self._prepare_image_custom(img), word, lex, comment)
                             if bucket_size >= batch_size:
                                 bucket = self.bucket_data.flush_out(
                                     self.bucket_specs,
@@ -99,3 +110,65 @@ class DataGen(object):
                 'comment': tf.io.FixedLenFeature([], tf.string, default_value=''),
             })
         return features['image'], features['label'], features['comment']
+
+    def _prepare_image(self, image):
+        """Resize the image to a maximum height of `self.height` and maximum
+        width of `self.width` while maintaining the aspect ratio. Pad the
+        resized image to a fixed size of ``[self.height, self.width]``.
+
+        This method used to be within the graph. I moved it here and it's not
+        used but it might be useful in the future.
+
+        """
+        img = tf.image.decode_jpeg(image, channels=self.channels)
+        dims = tf.shape(input=img)
+        dims = tf.cast(x=dims, dtype=tf.float32)
+
+        width = self.max_width
+        max_width = tf.cast(tf.math.ceil(tf.truediv(dims[1], dims[0]) * DataGen.IMAGE_HEIGHT), dtype=tf.int32)
+
+        max_height = tf.cast(tf.math.ceil(tf.truediv(tf.cast(x=width, dtype=tf.float32),
+                                                    tf.cast(x=max_width, dtype=tf.float32)) * self.height_float),
+                             dtype=tf.int32)
+
+        resized = tf.cond(
+            # if width is greater or equal than max_width
+            # it returns the output of the satisfied condition below
+            # else it returns the image resized to max_height and width
+            pred=tf.greater_equal(width, max_width),
+            true_fn=lambda: tf.cond(
+                # if width is less or equal than max width
+                # it returns the image
+                # else it returns the resized image with dims self.height and max width
+                pred=tf.less_equal(tf.cast(x=dims[0], dtype=tf.int32), self.height),
+                true_fn=lambda: tf.cast(img, dtype=tf.float32),
+                false_fn=lambda: tf.image.resize(img, [self.height, max_width],
+                                               method=tf.image.ResizeMethod.BICUBIC),
+            ),
+            false_fn=lambda: tf.image.resize(img, [max_height, width],
+                                           method=tf.image.ResizeMethod.BICUBIC)
+        )
+
+        padded = tf.image.pad_to_bounding_box(resized, 0, 0, self.height, width).eval()
+
+        return padded
+
+    def _prepare_image_custom(self, image):
+        """
+        This function pre-processes the image before training. Make sure you apply the same
+        operations when carrying out the inference. In the original model the pre-processing
+        part took part within the graph, but some of those operations are not supported
+        in tflite thus it's been moved outside the graph. Currently, the model supports
+        only images of height 32 because of the way the convolutional part handles the
+        tensor shapes.
+        @TODO: adapt model to variable height images
+        Args:
+            image:
+        Returns:
+        """
+        img = Image.open(IO(image))
+        img = img.resize((self.max_width, self.height))
+        img = np.array(img)
+        img = np.expand_dims(img, 2)
+
+        return img
