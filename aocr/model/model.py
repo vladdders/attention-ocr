@@ -47,10 +47,12 @@ class Model(object):
 
         self.use_distance = use_distance
 
-        # We need resized width, not the actual width
-        max_resized_width = 1. * max_image_width / max_image_height * DataGen.IMAGE_HEIGHT
-
         self.max_original_width = max_image_width
+        self.max_original_height = max_image_height
+
+        # We need resized width, not the actual width
+        self.height = DataGen.IMAGE_HEIGHT
+        max_resized_width = 1. * max_image_width / max_image_height * self.height
         self.max_width = int(math.ceil(max_resized_width))
 
         self.encoder_size = int(math.ceil(1. * self.max_width / 4))
@@ -110,17 +112,12 @@ class Model(object):
 
         with tf.device(device_id):
 
-            self.height = tf.constant(DataGen.IMAGE_HEIGHT, dtype=tf.int32)
-            self.height_float = tf.constant(DataGen.IMAGE_HEIGHT, dtype=tf.float32)
+            self.img_pl = tf.compat.v1.placeholder(
+                dtype=tf.float32,
+                shape=(None, DataGen.IMAGE_HEIGHT, self.max_width, self.channels),
+                name='input')
 
-            self.img_pl = tf.compat.v1.placeholder(tf.string, name='input_image_as_bytes')
-            self.img_data = tf.cond(
-                pred=tf.less(tf.rank(self.img_pl), 1),
-                true_fn=lambda: tf.expand_dims(self.img_pl, 0),
-                false_fn=lambda: self.img_pl
-            )
-            self.img_data = tf.map_fn(self._prepare_image, self.img_data, dtype=tf.float32)
-            num_images = tf.shape(input=self.img_data)[0]
+            num_images = tf.shape(input=self.img_pl)[0]
 
             # TODO: create a mask depending on the image/batch size
             self.encoder_masks = []
@@ -140,7 +137,7 @@ class Model(object):
                 else:
                     self.target_weights.append(tf.tile([0.], [num_images]))
 
-            cnn_model = CNN(self.img_data, not self.forward_only)
+            cnn_model = CNN(self.img_pl, not self.forward_only)
             self.conv_output = cnn_model.tf_output()
             self.perm_conv_output = tf.transpose(a=self.conv_output, perm=[1, 0, 2])
             self.attention_decoder_model = Seq2SeqModel(
@@ -156,71 +153,35 @@ class Model(object):
                 forward_only=self.forward_only,
                 use_gru=use_gru)
 
-            table = tf.contrib.lookup.MutableHashTable(
-                key_dtype=tf.int64,
-                value_dtype=tf.string,
-                default_value="",
-                checkpoint=True,
-            )
+            num_feed = []
+            prb_feed = []
 
-            insert = table.insert(
-                tf.constant(list(range(len(DataGen.CHARMAP))), dtype=tf.int64),
-                tf.constant(DataGen.CHARMAP),
-            )
+            for line in xrange(len(self.attention_decoder_model.output)):
+                guess = tf.argmax(input=self.attention_decoder_model.output[line], axis=1)
+                proba = tf.reduce_max(
+                    input_tensor=tf.nn.softmax(self.attention_decoder_model.output[line]), axis=1)
+                num_feed.append(guess)
+                prb_feed.append(proba)
 
-            with tf.control_dependencies([insert]):
-                num_feed = []
-                prb_feed = []
+            # In the original code the predictions are converted into
+            # the corresponding characters using a mutable hash table.
+            # Then, they are joined into a single string. Since the
+            # mutable hash table does not exist in the 2.0 API covered
+            # with the fact that it's a bit of a hustle to use control
+            # flow operations in tf lite, the string will be obtained
+            # outside the model based on the same charmap used in the
+            # training process.
+            trans_output = tf.transpose(a=num_feed)
 
-                for line in xrange(len(self.attention_decoder_model.output)):
-                    guess = tf.argmax(self.attention_decoder_model.output[line], axis=1)
-                    proba = tf.reduce_max(
-                        tf.nn.softmax(self.attention_decoder_model.output[line]), axis=1)
-                    num_feed.append(guess)
-                    prb_feed.append(proba)
+            # Again, in the original code the probability is calculated
+            # using the map_fn functionality, but that causes an error
+            # in the tf lite conversion stage so it'll not be used here.
+            # Instead, the total probability will be obtained outside
+            # the model.
+            trans_outprb = tf.transpose(a=prb_feed)
 
-                # Join the predictions into a single output string.
-                trans_output = tf.transpose(num_feed)
-                trans_output = tf.map_fn(
-                    lambda m: tf.foldr(
-                        lambda a, x: tf.cond(
-                            tf.equal(x, DataGen.EOS_ID),
-                            lambda: '',
-                            lambda: table.lookup(x) + a  # pylint: disable=undefined-variable
-                        ),
-                        m,
-                        initializer=''
-                    ),
-                    trans_output,
-                    dtype=tf.string
-                )
-
-                # Calculate the total probability of the output string.
-                trans_outprb = tf.transpose(prb_feed)
-                trans_outprb = tf.gather(trans_outprb, tf.range(tf.size(trans_output)))
-                trans_outprb = tf.map_fn(
-                    lambda m: tf.foldr(
-                        lambda a, x: tf.multiply(tf.cast(x, tf.float32), a),
-                        m,
-                        initializer=tf.cast(1, tf.float32)
-                    ),
-                    trans_outprb,
-                    dtype=tf.float32
-                )
-
-                self.prediction = tf.cond(
-                    tf.equal(tf.shape(trans_output)[0], 1),
-                    lambda: trans_output[0],
-                    lambda: trans_output,
-                )
-                self.probability = tf.cond(
-                    tf.equal(tf.shape(trans_outprb)[0], 1),
-                    lambda: trans_outprb[0],
-                    lambda: trans_outprb,
-                )
-
-                self.prediction = tf.identity(self.prediction, name='prediction')
-                self.probability = tf.identity(self.probability, name='probability')
+            self.prediction = tf.identity(trans_output, name='prediction')
+            self.probability = tf.identity(trans_outprb, name='probability')
 
             if not self.forward_only:  # train
                 self.updates = []
@@ -289,7 +250,8 @@ class Model(object):
         num_correct = 0.0
         num_total = 0.0
 
-        s_gen = DataGen(data_path, self.buckets, epochs=1, max_width=self.max_original_width)
+        s_gen = DataGen(data_path, self.buckets, epochs=1, max_width=self.max_original_width,
+                        max_height=self.max_original_height, channels=self.channels)
         for batch in s_gen.gen(1):
             current_step += 1
             # Get a batch (one image) and make a step.
@@ -302,10 +264,10 @@ class Model(object):
             output = result['prediction']
             ground = batch['labels'][0]
             comment = batch['comments'][0]
-            if sys.version_info >= (3,):
-                output = output.decode('iso-8859-1')
-                ground = ground.decode('iso-8859-1')
-                comment = comment.decode('iso-8859-1')
+            # if sys.version_info >= (3,):
+                # output = output.decode('iso-8859-1')
+                # ground = ground.decode('iso-8859-1')
+                # comment = comment.decode('iso-8859-1')
 
             probability = result['probability']
 
@@ -336,7 +298,7 @@ class Model(object):
                                     attns,
                                     output,
                                     self.max_width,
-                                    DataGen.IMAGE_HEIGHT,
+                                    self.height,
                                     threshold=threshold,
                                     normalize=normalize,
                                     binarize=binarize,
@@ -364,8 +326,10 @@ class Model(object):
         logging.info('num_epoch: %d', num_epoch)
         s_gen = DataGen(
             data_path, self.buckets,
-            epochs=num_epoch, max_width=self.max_original_width
-        )
+            epochs=num_epoch,
+            max_width=self.max_original_width,
+            max_height=self.max_original_height,
+            channels=self.channels)
         step_time = 0.0
         loss = 0.0
         current_step = 0
@@ -489,33 +453,3 @@ class Model(object):
                 res['attentions'] = outputs[3:]
 
         return res
-
-    def _prepare_image(self, image):
-        """Resize the image to a maximum height of `self.height` and maximum
-        width of `self.width` while maintaining the aspect ratio. Pad the
-        resized image to a fixed size of ``[self.height, self.width]``."""
-        img = tf.image.decode_png(image, channels=self.channels)
-        dims = tf.shape(img)
-        dims = tf.cast(x=dims, dtype=tf.float32)
-
-        width = self.max_width
-
-        max_width = tf.cast(tf.math.ceil(tf.truediv(dims[1], dims[0]) * self.height_float), dtype=tf.int32)
-
-        max_height = tf.cast(tf.math.ceil(tf.truediv(tf.cast(x=width, dtype=tf.float32),
-                                                    tf.cast(x=max_width, dtype=tf.float32)) * self.height_float), dtype=tf.int32)
-
-        resized = tf.cond(
-            pred=tf.greater_equal(width, max_width),
-            true_fn=lambda: tf.cond(
-                pred=tf.less_equal(tf.cast(x=dims[0], dtype=tf.int32), self.height),
-                true_fn=lambda: tf.cast(img, dtype=tf.float32),
-                false_fn=lambda: tf.image.resize(img, [self.height, max_width],
-                                               method=tf.image.ResizeMethod.BICUBIC),
-            ),
-            false_fn=lambda: tf.image.resize(img, [max_height, width],
-                                           method=tf.image.ResizeMethod.BICUBIC)
-        )
-
-        padded = tf.image.pad_to_bounding_box(resized, 0, 0, self.height, width)
-        return padded
