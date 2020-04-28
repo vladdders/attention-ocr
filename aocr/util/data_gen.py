@@ -3,7 +3,7 @@ from __future__ import absolute_import
 import math
 import sys
 
-import numpy as np
+import numpy
 import tensorflow as tf
 
 from PIL import Image
@@ -96,9 +96,9 @@ class DataGen(object):
 
         assert len(lex) < self.bucket_specs[-1][1]
 
-        return np.array(
+        return numpy.array(
             [self.GO_ID] + [self.CHARMAP.index(char) for char in lex] + [self.EOS_ID],
-            dtype=np.int32)
+            dtype=numpy.int32)
 
     @staticmethod
     def _parse_record(example_proto):
@@ -168,7 +168,7 @@ class DataGen(object):
         """
         img = Image.open(IO(image))
         img = img.resize((self.max_width, self.height))
-        img = np.array(img)
-        img = np.expand_dims(img, 2)
+        img = numpy.array(img)
+        img = numpy.expand_dims(img, 2)
 
         return img

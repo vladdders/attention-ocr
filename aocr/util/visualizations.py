@@ -3,10 +3,7 @@ from __future__ import division
 
 import math
 import os
-
-from io import BytesIO
-
-import numpy as np
+import numpy
 
 from PIL import Image
 
@@ -82,8 +79,8 @@ def visualize_attention(filename, output_dir, attentions, pred, pad_width,
             fword.write(ground)
 
         # Get image sequence with attention applied.
-        img_data = np.squeeze(filename, axis=(0, 3))
-        img_data = img_data.astype(np.uint8)
+        img_data = numpy.squeeze(filename, axis=(0, 3))
+        img_data = img_data.astype(numpy.uint8)
         img_out_frames, _ = map_attentions(img_data,
                                            attentions,
                                            pred,
@@ -94,7 +91,7 @@ def visualize_attention(filename, output_dir, attentions, pred, pad_width,
                                            binarize=binarize)
 
         # Create initial image frame.
-        img_out_init = (img_data * 0.3).astype(np.uint8)
+        img_out_init = (img_data * 0.3).astype(numpy.uint8)
         img_out_init = Image.fromarray(img_out_init)
         img_out_init = img_out_init.convert('RGB')
 
@@ -111,7 +108,7 @@ def visualize_attention(filename, output_dir, attentions, pred, pad_width,
 def map_attentions(img_data, attentions, pred, pad_width, pad_height,
                    threshold=1, normalize=False, binarize=True):
     """Map the attentions to the image."""
-    img_out_agg = np.zeros(img_data.shape)
+    img_out_agg = numpy.zeros(img_data.shape)
     img_out_frames = []
 
     width, height = img_data.shape[1], img_data.shape[0]
@@ -154,14 +151,14 @@ def map_attentions(img_data, attentions, pred, pad_width, pad_height,
             (int(pad_width*width_resize_ratio), int(pad_height*height_resize_ratio)),
             Image.NEAREST)
         attention = attention.crop((0, 0, width, height))
-        attention = np.asarray(attention)
+        attention = numpy.asarray(attention)
 
         # Add new axis as needed (e.g., RGB images).
         if len(img_data.shape) == 3:
-            attention = attention[..., np.newaxis]
+            attention = attention[..., numpy.newaxis]
 
         # Update the image frame with attended region(s).
-        img_out_i = (img_data * np.maximum(attention, 0.3)).astype(np.uint8)
+        img_out_i = (img_data * numpy.maximum(attention, 0.3)).astype(numpy.uint8)
         img_out_i = Image.fromarray(img_out_i)
         img_out_i = img_out_i.convert('RGB')
 
