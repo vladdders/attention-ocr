@@ -81,14 +81,9 @@ def visualize_attention(filename, output_dir, attentions, pred, pad_width,
         if ground is not None:
             fword.write(ground)
 
-        if isinstance(filename, str):
-            img_file = open(filename, 'rb')
-            img = Image.open(img_file)
-        else:
-            img = Image.open(BytesIO(filename))
-
         # Get image sequence with attention applied.
-        img_data = np.asarray(img, dtype=np.uint8)
+        img_data = np.squeeze(filename, axis=(0, 3))
+        img_data = img_data.astype(np.uint8)
         img_out_frames, _ = map_attentions(img_data,
                                            attentions,
                                            pred,
@@ -111,10 +106,6 @@ def visualize_attention(filename, output_dir, attentions, pred, pad_width,
 
         img_out_frames[0].save(output_animation, format='gif', save_all=True, loop=999,
                                duration=500, append_images=img_out_frames[1:])
-
-        if isinstance(filename, str):
-            img_file.close()
-        img.close()
 
 
 def map_attentions(img_data, attentions, pred, pad_width, pad_height,
