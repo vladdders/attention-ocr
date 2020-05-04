@@ -181,7 +181,11 @@ class Model(object):
             # the model.
             trans_outprb = tf.transpose(a=prb_feed)
 
-            self.prediction = tf.identity(trans_output, name='prediction')
+            # cast the output to float 32 otherwise it'll have int64
+            # type which is not supported in tflite.
+            self.prediction = tf.cast(x=trans_output, dtype=tf.float32)
+
+            self.prediction = tf.identity(self.prediction, name='prediction')
             self.probability = tf.identity(trans_outprb, name='probability')
 
             if not self.forward_only:  # train
