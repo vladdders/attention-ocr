@@ -115,6 +115,7 @@ crashlytics-build.properties
 misc/
 data/evaluation_data
 .DS_Store
-.venv
+venv/
+logs/
 
 *~
