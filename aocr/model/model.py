@@ -98,6 +98,8 @@ class Model(object):
         self.steps_per_checkpoint = steps_per_checkpoint
         self.model_dir = model_dir
         self.output_dir = output_dir
+        self._TEST_BATCH_SIZE = 64
+        self.original_batch_size = batch_size
         self.batch_size = batch_size
         self.global_step = tf.Variable(0, trainable=False)
         self.phase = phase
@@ -253,7 +255,7 @@ class Model(object):
     def test(self, data_path):
 
         def get_word_from_sequence(sequence):
-            return ''.join(DataGen.CHARMAP[j] for j in sequence)
+            return ''.join(DataGen.CHARMAP[int(j)] for j in sequence)
 
         def get_total_probability(probabilities):
             return reduce(lambda x, y: x * y, probabilities)
@@ -264,81 +266,82 @@ class Model(object):
 
         s_gen = DataGen(data_path, self.buckets, epochs=1, max_width=self.max_original_width,
                         max_height=self.max_original_height, channels=self.channels)
-        for batch in s_gen.gen(1):
+        for batch in s_gen.gen(self._TEST_BATCH_SIZE):
             current_step += 1
             # Get a batch (one image) and make a step.
             start_time = time.time()
-            result = self.step(batch, self.forward_only)
+            result = self.step(batch, forward_only=True)
             curr_step_time = (time.time() - start_time)
 
             num_total += 1
 
-            output = result['prediction']
-            # you want to decode the output as it's no longer done in the model graph
-            output = get_word_from_sequence(output[0])
-            ground = batch['labels'][0]
-            comment = batch['comments'][0]
-            if sys.version_info >= (3,):
-                ground = ground.decode('iso-8859-1')
-                comment = comment.decode('iso-8859-1')
+            outputs = result['prediction']
+            probabilities = result['probability']
+            grounds = batch['labels']
+            comments = batch['comments']
 
-            probability = result['probability']
+            for output, probability, ground, comment in zip(outputs, probabilities, grounds, comments):
 
-            # you also want to get the total probability as it's no longer done in the model graph
-            probability = get_total_probability(probability[0])
+                # you want to decode the output as it's no longer done in the model graph
+                output = get_word_from_sequence(output)
+                if sys.version_info >= (3,):
+                    ground = ground.decode('iso-8859-1')
+                    comment = comment.decode('iso-8859-1')
+                # you also want to get the total probability as it's no longer done in the model graph
+                probability = get_total_probability(probability)
 
-            if self.use_distance:
-                incorrect = distance.levenshtein(output, ground)
-                if not ground:
-                    if not output:
-                        incorrect = 0
+                if self.use_distance:
+                    incorrect = distance.levenshtein(output, ground)
+                    if not ground:
+                        if not output:
+                            incorrect = 0
+                        else:
+                            incorrect = 1
                     else:
-                        incorrect = 1
+                        incorrect = float(incorrect) / len(ground)
+                    incorrect = min(1, incorrect)
                 else:
-                    incorrect = float(incorrect) / len(ground)
-                incorrect = min(1, incorrect)
-            else:
-                incorrect = 0 if output == ground else 1
+                    incorrect = 0 if output == ground else 1
 
-            num_correct += 1. - incorrect
+                num_correct += 1. - incorrect
 
-            if self.visualize:
-                # Attention visualization.
-                threshold = 0.5
-                normalize = True
-                binarize = True
-                attns_list = [[a.tolist() for a in step_attn] for step_attn in result['attentions']]
-                attns = np.array(attns_list).transpose([1, 0, 2])
-                visualize_attention(batch['data'],
-                                    'out',
-                                    attns,
-                                    output,
-                                    self.max_width,
-                                    self.height,
-                                    threshold=threshold,
-                                    normalize=normalize,
-                                    binarize=binarize,
-                                    ground=ground,
-                                    flag=None)
+                if self.visualize:
+                    # Attention visualization.
+                    threshold = 0.5
+                    normalize = True
+                    binarize = True
+                    attns_list = [[a.tolist() for a in step_attn] for step_attn in result['attentions']]
+                    attns = np.array(attns_list).transpose([1, 0, 2])
+                    visualize_attention(batch['data'],
+                                        'out',
+                                        attns,
+                                        output,
+                                        self.max_width,
+                                        self.height,
+                                        threshold=threshold,
+                                        normalize=normalize,
+                                        binarize=binarize,
+                                        ground=ground,
+                                        flag=None)
 
-            step_accuracy = "{:>4.0%}".format(1. - incorrect)
-            if incorrect:
-                correctness = step_accuracy + " ({} vs {}) {}".format(output, ground, comment)
-            else:
-                correctness = step_accuracy + " (" + ground + ")"
+                step_accuracy = "{:>4.0%}".format(1. - incorrect)
+                if incorrect:
+                    correctness = step_accuracy + " ({} vs {}) {}".format(output, ground, comment)
+                else:
+                    correctness = step_accuracy + " (" + ground + ")"
 
-            logging.info('Step {:.0f} ({:.3f}s). '
-                         'Accuracy: {:6.2%}, '
-                         'loss: {:f}, perplexity: {:0<7.6}, probability: {:6.2%} {}'.format(
-                             current_step,
-                             curr_step_time,
-                             num_correct / num_total,
-                             result['loss'],
-                             math.exp(result['loss']) if result['loss'] < 300 else float('inf'),
-                             probability,
-                             correctness))
+                logging.info('Step {:.0f} ({:.3f}s). '
+                             'Accuracy: {:6.2%}, '
+                             'loss: {:f}, perplexity: {:0<7.6}, probability: {:6.2%} {}'.format(
+                                 current_step,
+                                 curr_step_time,
+                                 num_correct / num_total,
+                                 result['loss'],
+                                 math.exp(result['loss']) if result['loss'] < 300 else float('inf'),
+                                 probability,
+                                 correctness))
 
-    def train(self, data_path, num_epoch):
+    def train(self, data_path, num_epoch, eval_data_path=None):
         logging.info('num_epoch: %d', num_epoch)
         s_gen = DataGen(
             data_path, self.buckets,
@@ -409,6 +412,13 @@ class Model(object):
                 logging.info("Saving the model at step %d.", current_step)
                 self.saver_all.save(self.sess, self.checkpoint_path, global_step=self.global_step)
                 step_time, loss = 0.0, 0.0
+                if eval_data_path is not None and os.path.isfile(eval_data_path):
+                    self.batch_size = self._TEST_BATCH_SIZE
+                    self.test(eval_data_path)
+                    self.batch_size = self.original_batch_size
+                else:
+                    print("Evaluation cannot be performed, you either entered an invalid path or "
+                          "file does not exist.")
 
         # Print statistics for the previous epoch.
         perplexity = math.exp(loss) if loss < 300 else float('inf')

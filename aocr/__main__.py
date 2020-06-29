@@ -138,6 +138,11 @@ def process_args(args, defaults):
                               help=('training dataset in the TFRecords format'
                                     ' (default: %s)'
                                     % (defaults.DATA_PATH)))
+    parser_train.add_argument('--eval-dataset', dest="eval_dataset",
+                              type=str, default=defaults.EVAL_PATH,
+                              help=('evaluation dataset in the TFRecords format'
+                                    ' (default: %s)'
+                                    % (defaults.EVAL_PATH)))
     parser_train.add_argument('--steps-per-checkpoint', dest="steps_per_checkpoint",
                               type=int, default=defaults.STEPS_PER_CHECKPOINT,
                               metavar=defaults.STEPS_PER_CHECKPOINT,
@@ -254,7 +259,8 @@ def main(args=None):
         if parameters.phase == 'train':
             model.train(
                 data_path=parameters.dataset_path,
-                num_epoch=parameters.num_epoch
+                num_epoch=parameters.num_epoch,
+                eval_data_path = parameters.eval_dataset
             )
         elif parameters.phase == 'test':
             model.test(

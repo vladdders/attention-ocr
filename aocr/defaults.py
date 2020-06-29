@@ -14,6 +14,7 @@ class Config(object):
     # I/O
     NEW_DATASET_PATH = './dataset.tfrecords'
     DATA_PATH = './data.tfrecords'
+    EVAL_PATH = './test.tfrecords'
     MODEL_DIR = './checkpoints'
     LOG_PATH = 'aocr.log'
     OUTPUT_DIR = './results'
